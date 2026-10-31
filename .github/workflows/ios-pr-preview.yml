@@ -263,13 +263,17 @@ jobs:
           FMT_INCLUDE_DIR: ${{ env.DEPS_INSTALL }}/fmt/include
         run: |
           python3 -m unittest \
+            build_files/ios/tests/test_command_keymaps.py \
+            build_files/ios/tests/test_ghost_modifier_belt.py \
             build_files/ios/tests/test_ghost_file_access.py \
             build_files/ios/tests/test_simulator_file_access.py \
             build_files/ios/tests/test_file_access_runtime.py \
             build_files/ios/tests/test_ghost_hardware_input.py \
             build_files/ios/tests/test_ghost_virtual_pointer.py \
+            build_files/ios/tests/test_ghost_direct_touch.py \
             build_files/ios/tests/test_simulator_hardware_input.py \
             build_files/ios/tests/test_extension_commands_without_processes.py \
+            build_files/ios/tests/test_simulator_compute_failure.py \
             build_files/ios/tests/test_pr_preview_workflow.py
 
       - name: Build revision-matched native tools on cache miss

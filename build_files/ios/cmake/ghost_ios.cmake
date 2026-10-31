@@ -15,6 +15,8 @@ list(APPEND SRC
   intern/GHOST_IOSPencilContact.hh
   intern/GHOST_IOSSettingsLocation.hh
   intern/GHOST_IOSSettingsLocation.mm
+  intern/GHOST_IOSShortcutBar.hh
+  intern/GHOST_IOSShortcutBar.mm
   intern/GHOST_IOSVirtualPointer.hh
   intern/GHOST_IOSVirtualPointer.mm
   intern/GHOST_IOSVirtualPointerState.hh

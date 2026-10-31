@@ -6,6 +6,32 @@ description: Move the cursor, select objects, and navigate with touch gestures.
 Watch the [short video guide](/3d-modeling-thingy-ios/controls/video-guide/)
 for demonstrations of cursor targeting, navigation, and gesture edge cases.
 
+## Direct touch
+
+Direct touch is on by default: your finger works like the Apple Pencil.
+
+| Gesture | What it does |
+| --- | --- |
+| One-finger tap | Left click where you touch. |
+| One-finger drag | Left-button drag from where you touch: box select, sliders, gizmos, nodes. |
+| One-finger hold | Right click where you touch, for the context menu. |
+| Two-finger drag, pinch, three-finger drag | Navigate the editor under your fingers. |
+
+While a tool such as Move (`G`) runs, a one-finger drag moves it from where it
+is instead of jumping to your finger, and a tap confirms.
+
+The **shortcut bar** at the middle of the screen edge has the keys a touch
+screen lacks: Esc, Enter, G, R, S, Tab, X, Y, Z, I, A, Delete, E, D, H, N,
+the numpad views (1, 3, 7, 5, period, 0), Save and Search. Keys use the
+on-screen Shift, Ctrl, Alt and Cmd, so tap Shift, then A, to open the Add
+menu. A key goes to the editor you last touched. Tap the handle to tuck the
+keys away, or drag it to the other edge.
+
+The hand button at the top of the bar switches to the trackpad-style cursor
+described below.
+
+## Trackpad cursor
+
 Use the screen like a trackpad. Drag one finger to move the cursor, then tap
 anywhere to click at the cursor. To select a button, move the cursor over it
 first. A tap directly on the button only works if the cursor is already there.
@@ -31,9 +57,10 @@ during a long drag or transform without running out of screen.
 Some tools hide the cursor while you're using them. It comes back when
 you finish the operation.
 
-## Shift, Ctrl, and Alt
+## Shift, Ctrl, Alt, and Cmd
 
-The keyboard button in a corner of the screen opens Shift, Ctrl, and Alt keys.
+The keyboard button in a corner of the screen opens Shift, Ctrl, Alt, and Cmd
+keys.
 Tap it again to tuck the keys away.
 
 | Key action | What it does |
@@ -45,6 +72,9 @@ Tap it again to tuck the keys away.
 To select several objects, faces, or Outliner items, tap **Shift**, then click
 the next item. Double tap **Shift** to keep adding items. In the Outliner,
 **Ctrl** adds items and **Shift** selects a range.
+
+**Cmd** is for shortcuts you've set up with Command, such as keymaps brought
+over from a Mac. Blender's own Command shortcuts also work with **Ctrl**.
 
 Tapped and locked keys only apply to clicks and drags. Two-finger orbit and
 other navigation gestures keep working normally between clicks.
