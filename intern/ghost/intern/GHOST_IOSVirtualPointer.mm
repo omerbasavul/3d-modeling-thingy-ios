@@ -621,3 +621,8 @@ void GHOST_IOSVirtualPointer::setGrabMode(const GHOST_TGrabCursorMode mode)
   impl_->updatePointerLockPreference();
   impl_->updateCursorLayer();
 }
+
+bool GHOST_IOSVirtualPointer::isGrabbed() const
+{
+  return impl_->grab_mode_ != GHOST_kGrabDisable;
+}

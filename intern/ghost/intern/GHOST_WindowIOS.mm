@@ -14,6 +14,7 @@
 #include "GHOST_IOSModifierBelt.hh"
 #include "GHOST_IOSModifierLatch.hh"
 #include "GHOST_IOSPencilContact.hh"
+#include "GHOST_IOSShortcutBar.hh"
 #include "GHOST_IOSVirtualPointer.hh"
 #include "GHOST_SystemIOS.hh"
 
@@ -337,7 +338,8 @@ typedef struct UserInputEvent {
 @interface GHOSTUIWindow : UIWindow <UIGestureRecognizerDelegate,
                                       UIPencilInteractionDelegate,
                                       UITextFieldDelegate,
-                                      GHOSTIOSModifierBeltDelegate>
+                                      GHOSTIOSModifierBeltDelegate,
+                                      GHOSTIOSShortcutBarDelegate>
 {
   GHOST_SystemIOS *system;
   GHOST_WindowIOS *window;
@@ -393,6 +395,17 @@ typedef struct UserInputEvent {
   /* On-screen Shift, Ctrl, Alt and Cmd. */
   NSObject *modifier_belt;
   GHOST_IOSModifierLatch *modifier_latch;
+
+  /* Direct touch: a finger clicks and drags where it touches instead of moving a cursor. */
+  NSObject *shortcut_bar;
+  bool direct_touch;
+  /** The current one-finger drag pressed the left button at the finger. */
+  bool direct_drag_active;
+  /** Blender grabbed the cursor during the drag; the rest of it moves relatively. */
+  bool direct_drag_relative;
+  bool direct_hold_active;
+  GHOSTUITapGestureRecognizer *direct_tap_gesture_recognizer;
+  GHOSTUILongPressGestureRecognizer *direct_hold_gesture_recognizer;
 }
 
 - (void)setSystemAndWindowIOS:(GHOST_SystemIOS *)sysCocoa windowIOS:(GHOST_WindowIOS *)winCocoa;
@@ -402,6 +415,12 @@ typedef struct UserInputEvent {
 - (void)registerModifierBelt;
 - (void)modifierBeltPointerButton:(bool)pressed;
 - (void)modifierBeltCursorMoved:(CGPoint)point visible:(bool)visible;
+- (void)applyDirectTouchMode;
+- (bool)directTouchFollowsFinger;
+- (void)aimDirectTouchAtGesture:(UIGestureRecognizer *)sender;
+- (void)handleDirectTap:(GHOSTUITapGestureRecognizer *)sender;
+- (void)handleDirectHold:(GHOSTUILongPressGestureRecognizer *)sender;
+- (bool)handleDirectPan:(GHOSTUIPanGestureRecognizer *)sender;
 - (void)updateFileAccessControls;
 - (void)handleCloseWindow;
 - (BOOL)allowsPointerLock;
@@ -627,6 +646,14 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   file_access_controls = nil;
   modifier_belt = nil;
   modifier_latch = new GHOST_IOSModifierLatch();
+  shortcut_bar = nil;
+  direct_touch = GHOST_IOSShortcutBar_storedDirectTouch(
+      GHOST_IOSInputTuning::direct_touch_default);
+  direct_drag_active = false;
+  direct_drag_relative = false;
+  direct_hold_active = false;
+  direct_tap_gesture_recognizer = nil;
+  direct_hold_gesture_recognizer = nil;
 }
 
 - (void)releaseGestureRecognizer:(UIGestureRecognizer *)recognizer fromView:(UIView *)view
@@ -650,6 +677,8 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
 
   GHOST_IOSModifierBelt_destroy(modifier_belt);
   modifier_belt = nil;
+  GHOST_IOSShortcutBar_destroy(shortcut_bar);
+  shortcut_bar = nil;
   delete modifier_latch;
   modifier_latch = nullptr;
 
@@ -679,6 +708,10 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   [self releaseGestureRecognizer:hover_gesture_recognizer fromView:input_view];
   [self releaseGestureRecognizer:edge_swipe_left fromView:input_view];
   [self releaseGestureRecognizer:edge_swipe_right fromView:input_view];
+  [self releaseGestureRecognizer:direct_tap_gesture_recognizer fromView:input_view];
+  [self releaseGestureRecognizer:direct_hold_gesture_recognizer fromView:input_view];
+  direct_tap_gesture_recognizer = nil;
+  direct_hold_gesture_recognizer = nil;
   tap_gesture_recognizer = nil;
   double_tap_drag_gesture_recognizer = nil;
   triple_tap_gesture_recognizer = nil;
@@ -703,6 +736,16 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
     virtual_pointer->endRelative();
   }
   two_finger_hold_active = false;
+
+  if (virtual_pointer != nullptr && (direct_drag_active || direct_hold_active)) {
+    virtual_pointer->setSource(GHOST_IOSPointerSource::Finger);
+    virtual_pointer->button(direct_hold_active ? GHOST_kButtonMaskRight : GHOST_kButtonMaskLeft,
+                            false);
+    virtual_pointer->endRelative();
+  }
+  direct_drag_active = false;
+  direct_drag_relative = false;
+  direct_hold_active = false;
 
   if (pencil_interaction != nil) {
     [pencil_interaction setDelegate:nil];
@@ -804,6 +847,10 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
     return;
   }
   modifier_belt = GHOST_IOSModifierBelt_create(window->getView(), self);
+  /* Child windows (file browser, render view) keep their native close and file controls. */
+  if (window->isMainWindow() && shortcut_bar == nil) {
+    shortcut_bar = GHOST_IOSShortcutBar_create(window->getView(), self, direct_touch);
+  }
 }
 
 static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier)
@@ -903,6 +950,87 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
 - (void)modifierBeltCursorMoved:(CGPoint)point visible:(bool)visible
 {
   GHOST_IOSModifierBelt_setCursor(modifier_belt, point, visible);
+}
+
+/* Send one on-screen shortcut. Latched on-screen modifiers apply to it like to a click, so
+ * Shift then A opens the Add menu. The key goes to the editor under the cursor, which in direct
+ * touch is where the finger last touched. */
+- (void)shortcutBarPressed:(const GHOST_IOSShortcut &)shortcut
+{
+  if (system == nullptr || window == nullptr) {
+    return;
+  }
+  @synchronized(self) {
+    [self modifierBeltPointerButton:true];
+    if (shortcut.ctrl) {
+      [self generateKeyEvent:GHOST_kKeyLeftControl down:true utf8:nullptr];
+    }
+    if (shortcut.shift) {
+      [self generateKeyEvent:GHOST_kKeyLeftShift down:true utf8:nullptr];
+    }
+    if (shortcut.alt) {
+      [self generateKeyEvent:GHOST_kKeyLeftAlt down:true utf8:nullptr];
+    }
+    [self generateKeyEvent:shortcut.key down:true utf8:shortcut.utf8];
+    [self generateKeyEvent:shortcut.key down:false utf8:nullptr];
+    if (shortcut.alt) {
+      [self generateKeyEvent:GHOST_kKeyLeftAlt down:false utf8:nullptr];
+    }
+    if (shortcut.shift) {
+      [self generateKeyEvent:GHOST_kKeyLeftShift down:false utf8:nullptr];
+    }
+    if (shortcut.ctrl) {
+      [self generateKeyEvent:GHOST_kKeyLeftControl down:false utf8:nullptr];
+    }
+    [self modifierBeltPointerButton:false];
+  }
+}
+
+- (void)shortcutBarDirectTouchChanged:(BOOL)on
+{
+  direct_touch = on;
+  [self applyDirectTouchMode];
+}
+
+/* Direct touch hands one-finger taps, holds and drags to the direct recognizers. The trackpad
+ * cursor keeps its tap, triple tap and tap-then-drag recognizers. Pencil is unaffected. */
+- (void)applyDirectTouchMode
+{
+  NSArray *finger = @[ @(UITouchTypeDirect) ];
+  NSArray *none = @[];
+  tap_gesture_recognizer.allowedTouchTypes = direct_touch ?
+                                                 @[ @(UITouchTypePencil) ] :
+                                                 @[ @(UITouchTypePencil), @(UITouchTypeDirect) ];
+  double_tap_drag_gesture_recognizer.allowedTouchTypes = direct_touch ? none : finger;
+  triple_tap_gesture_recognizer.allowedTouchTypes = direct_touch ? none : finger;
+  direct_tap_gesture_recognizer.allowedTouchTypes = direct_touch ? finger : none;
+  direct_hold_gesture_recognizer.allowedTouchTypes = direct_touch ? finger : none;
+}
+
+/* While Blender has grabbed the cursor (a transform, a number-field drag) the finger moves the
+ * cursor relatively and a tap confirms where it is, so nothing jumps to the finger. */
+- (bool)directTouchFollowsFinger
+{
+  return direct_touch && virtual_pointer != nullptr && !virtual_pointer->isGrabbed();
+}
+
+/* Navigation gestures act on the editor under the fingers, not under an old cursor position. */
+- (void)aimDirectTouchAtGesture:(UIGestureRecognizer *)sender
+{
+  if (![self directTouchFollowsFinger] || direct_drag_active || direct_hold_active ||
+      two_finger_hold_active)
+  {
+    return;
+  }
+  GHOST_Buttons buttons;
+  virtual_pointer->getButtons(buttons);
+  if (buttons.get(GHOST_kButtonMaskLeft) || buttons.get(GHOST_kButtonMaskMiddle) ||
+      buttons.get(GHOST_kButtonMaskRight))
+  {
+    return;
+  }
+  const CGPoint point = window->scalePointToWindow([sender locationInView:window->getView()]);
+  virtual_pointer->moveAbsolute(point.x, point.y, GHOST_IOSPointerSource::Finger);
 }
 
 - (void)handleCloseWindow
@@ -1243,6 +1371,30 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   [window->getView() addGestureRecognizer:hover_gesture_recognizer];
   current_pencil_touch = nil;
 
+  /* Direct touch: a finger tap clicks where it touches; a still hold is a right click. */
+  direct_hold_gesture_recognizer = [[GHOSTUILongPressGestureRecognizer alloc]
+      initWithTarget:self
+              action:@selector(handleDirectHold:)];
+  direct_hold_gesture_recognizer.delegate = self;
+  direct_hold_gesture_recognizer.cancelsTouchesInView = false;
+  direct_hold_gesture_recognizer.numberOfTouchesRequired = 1;
+  direct_hold_gesture_recognizer.minimumPressDuration =
+      GHOST_IOSInputTuning::direct_touch_right_click_hold_seconds;
+  direct_hold_gesture_recognizer.allowableMovement =
+      GHOST_IOSInputTuning::direct_touch_right_click_slop_points;
+  [window->getView() addGestureRecognizer:direct_hold_gesture_recognizer];
+
+  direct_tap_gesture_recognizer = [[GHOSTUITapGestureRecognizer alloc]
+      initWithTarget:self
+              action:@selector(handleDirectTap:)];
+  direct_tap_gesture_recognizer.delegate = self;
+  direct_tap_gesture_recognizer.cancelsTouchesInView = false;
+  direct_tap_gesture_recognizer.numberOfTapsRequired = 1;
+  direct_tap_gesture_recognizer.numberOfTouchesRequired = 1;
+  [direct_tap_gesture_recognizer requireGestureRecognizerToFail:direct_hold_gesture_recognizer];
+  [window->getView() addGestureRecognizer:direct_tap_gesture_recognizer];
+  [self applyDirectTouchMode];
+
   /**  Apple Pencil double-tap. */
   pencil_interaction = [[UIPencilInteraction alloc] init];
   pencil_interaction.delegate = self;
@@ -1331,7 +1483,9 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   if (GHOST_IOSFileAccess_containsView(file_access_controls, touch.view)) {
     return NO;
   }
-  if (GHOST_IOSModifierBelt_containsView(modifier_belt, touch.view)) {
+  if (GHOST_IOSModifierBelt_containsView(modifier_belt, touch.view) ||
+      GHOST_IOSShortcutBar_containsView(shortcut_bar, touch.view))
+  {
     return NO;
   }
   return YES;
@@ -1377,7 +1531,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
            (touch.view == close_window_button ||
             [touch.view isDescendantOfView:close_window_button])) ||
           GHOST_IOSFileAccess_containsView(file_access_controls, touch.view) ||
-          GHOST_IOSModifierBelt_containsView(modifier_belt, touch.view))
+          GHOST_IOSModifierBelt_containsView(modifier_belt, touch.view) ||
+          GHOST_IOSShortcutBar_containsView(shortcut_bar, touch.view))
       {
         continue;
       }
@@ -1572,6 +1727,7 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
 {
   const CGPoint point = [sender getScaledTouchPoint:window];
   if (sender.state == UIGestureRecognizerStateBegan) {
+    [self aimDirectTouchAtGesture:sender];
     two_finger_hold_active = true;
     virtual_pointer->beginRelative(point.x, point.y);
     virtual_pointer->button(GHOST_kButtonMaskRight, true);
@@ -1623,8 +1779,111 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   [self generateKeyEvent:GHOST_kKeyF3 down:false utf8:nullptr];
 }
 
+- (void)handleDirectTap:(GHOSTUITapGestureRecognizer *)sender
+{
+  if (sender.state != UIGestureRecognizerStateEnded) {
+    return;
+  }
+  if ([self directTouchFollowsFinger]) {
+    const CGPoint point = [sender getScaledTouchPoint:window];
+    virtual_pointer->moveAbsolute(point.x, point.y, GHOST_IOSPointerSource::Finger);
+  }
+  else {
+    virtual_pointer->setSource(GHOST_IOSPointerSource::Finger);
+  }
+  virtual_pointer->click(GHOST_kButtonMaskLeft);
+}
+
+- (void)handleDirectHold:(GHOSTUILongPressGestureRecognizer *)sender
+{
+  const CGPoint point = [sender getScaledTouchPoint:window];
+  if (sender.state == UIGestureRecognizerStateBegan) {
+    direct_hold_active = true;
+    if ([self directTouchFollowsFinger]) {
+      virtual_pointer->moveAbsolute(point.x, point.y, GHOST_IOSPointerSource::Finger);
+    }
+    else {
+      virtual_pointer->setSource(GHOST_IOSPointerSource::Finger);
+    }
+    virtual_pointer->button(GHOST_kButtonMaskRight, true);
+    return;
+  }
+  if (sender.state == UIGestureRecognizerStateChanged && direct_hold_active) {
+    if (!virtual_pointer->isGrabbed()) {
+      virtual_pointer->moveAbsolute(point.x, point.y, GHOST_IOSPointerSource::Finger);
+    }
+    return;
+  }
+  if ((sender.state == UIGestureRecognizerStateEnded ||
+       sender.state == UIGestureRecognizerStateCancelled ||
+       sender.state == UIGestureRecognizerStateFailed) &&
+      direct_hold_active)
+  {
+    virtual_pointer->button(GHOST_kButtonMaskRight, false);
+    direct_hold_active = false;
+  }
+}
+
+/* A one-finger drag presses the left button where the finger lands and follows it, like the
+ * Pencil. Returns false when the trackpad path should handle the gesture instead. */
+- (bool)handleDirectPan:(GHOSTUIPanGestureRecognizer *)sender
+{
+  if (sender.state == UIGestureRecognizerStateBegan) {
+    if (![self directTouchFollowsFinger]) {
+      direct_drag_active = false;
+      return false;
+    }
+    const CGPoint initial_point = [sender getScaledInitialTouchPoint:window];
+    const CGPoint point = [sender getScaledTouchPoint:window];
+    direct_drag_active = true;
+    direct_drag_relative = false;
+    virtual_pointer->moveAbsolute(
+        initial_point.x, initial_point.y, GHOST_IOSPointerSource::Finger);
+    virtual_pointer->button(GHOST_kButtonMaskLeft, true);
+    virtual_pointer->moveAbsolute(point.x, point.y, GHOST_IOSPointerSource::Finger);
+    return true;
+  }
+  if (!direct_drag_active) {
+    return false;
+  }
+
+  const CGPoint point = [sender getScaledTouchPoint:window];
+  if (sender.state == UIGestureRecognizerStateChanged) {
+    if (!direct_drag_relative && virtual_pointer->isGrabbed()) {
+      /* Blender grabbed the cursor for this drag, for example a number field. Its wrapping
+       * needs relative motion, so continue from here like the trackpad cursor. */
+      direct_drag_relative = true;
+      virtual_pointer->beginRelativeAtTime(point.x, point.y, [sender getTouchTimestamp]);
+      return true;
+    }
+    if (direct_drag_relative) {
+      virtual_pointer->moveRelativeToAtTime(point.x, point.y, [sender getTouchTimestamp]);
+    }
+    else {
+      virtual_pointer->moveAbsolute(point.x, point.y, GHOST_IOSPointerSource::Finger);
+    }
+    return true;
+  }
+
+  if (sender.state == UIGestureRecognizerStateEnded ||
+      sender.state == UIGestureRecognizerStateCancelled ||
+      sender.state == UIGestureRecognizerStateFailed)
+  {
+    virtual_pointer->button(GHOST_kButtonMaskLeft, false);
+    if (direct_drag_relative) {
+      virtual_pointer->endRelative();
+    }
+    direct_drag_active = false;
+    direct_drag_relative = false;
+  }
+  return true;
+}
+
 - (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender
 {
+  if (direct_touch && [self handleDirectPan:sender]) {
+    return;
+  }
   if (sender.state == UIGestureRecognizerStateBegan) {
     const CGPoint initial_touch_point = [sender getScaledInitialTouchPoint:window];
     const CGPoint touch_point = [sender getScaledTouchPoint:window];
@@ -1681,6 +1940,9 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
 
 - (void)handlePan2f:(GHOSTUIPanGestureRecognizer *)sender
 {
+  if (sender.state == UIGestureRecognizerStateBegan) {
+    [self aimDirectTouchAtGesture:sender];
+  }
   /* Translation can be non-zero on begin event */
   if (sender.state == UIGestureRecognizerStateBegan ||
       sender.state == UIGestureRecognizerStateChanged)
@@ -1712,6 +1974,9 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
 
 - (void)handlePan3f:(GHOSTUIPanGestureRecognizer *)sender
 {
+  if (sender.state == UIGestureRecognizerStateBegan) {
+    [self aimDirectTouchAtGesture:sender];
+  }
   if (sender.state == UIGestureRecognizerStateBegan ||
       sender.state == UIGestureRecognizerStateChanged)
   {
@@ -1850,6 +2115,7 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
 
   /* Pinch/Zoom gestures */
   if (sender.state == UIGestureRecognizerStateBegan) {
+    [self aimDirectTouchAtGesture:sender];
     /* Set an initial distance value. */
     CGFloat point_distance = [sender getScaledDistance:window];
     [sender setCachedDistance:point_distance];

@@ -58,6 +58,8 @@ class GHOST_IOSVirtualPointer {
   GHOST_TSuccess getCursorPosition(int32_t &screen_x, int32_t &screen_y) const;
   void setBlenderVisibility(bool visible);
   void setGrabMode(GHOST_TGrabCursorMode mode);
+  /** Blender grabbed the cursor, for example during a transform or a number-field drag. */
+  bool isGrabbed() const;
 
  private:
   class Impl;
