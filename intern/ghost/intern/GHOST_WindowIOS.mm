@@ -1029,7 +1029,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   {
     return;
   }
-  const CGPoint point = window->scalePointToWindow([sender locationInView:window->getView()]);
+  CGPoint point = [sender locationInView:window->getView()];
+  point = window->scalePointToWindow(point);
   virtual_pointer->moveAbsolute(point.x, point.y, GHOST_IOSPointerSource::Finger);
 }
 

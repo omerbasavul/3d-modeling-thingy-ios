@@ -37,7 +37,7 @@ struct GHOST_IOSShortcutKeyInfo {
  * selected and camera. */
 static const GHOST_IOSShortcutKeyInfo GHOST_IOS_SHORTCUT_KEYS[] = {
     {@"Esc", @"blender_shortcut_esc", {GHOST_kKeyEsc, nullptr, false, false, false}},
-    {@"⏎", @"blender_shortcut_enter", {GHOST_kKeyEnter, nullptr, false, false, false}},
+    {@"Enter", @"blender_shortcut_enter", {GHOST_kKeyEnter, nullptr, false, false, false}},
     {@"G", @"blender_shortcut_g", {GHOST_kKeyG, "g", false, false, false}},
     {@"R", @"blender_shortcut_r", {GHOST_kKeyR, "r", false, false, false}},
     {@"S", @"blender_shortcut_s", {GHOST_kKeyS, "s", false, false, false}},
@@ -56,7 +56,7 @@ static const GHOST_IOSShortcutKeyInfo GHOST_IOS_SHORTCUT_KEYS[] = {
     {@"3", @"blender_shortcut_numpad_3", {GHOST_kKeyNumpad3, nullptr, false, false, false}},
     {@"7", @"blender_shortcut_numpad_7", {GHOST_kKeyNumpad7, nullptr, false, false, false}},
     {@"5", @"blender_shortcut_numpad_5", {GHOST_kKeyNumpad5, nullptr, false, false, false}},
-    {@"·", @"blender_shortcut_numpad_period", {GHOST_kKeyNumpadPeriod, nullptr, false, false, false}},
+    {@".", @"blender_shortcut_numpad_period", {GHOST_kKeyNumpadPeriod, nullptr, false, false, false}},
     {@"0", @"blender_shortcut_numpad_0", {GHOST_kKeyNumpad0, nullptr, false, false, false}},
     {@"Save", @"blender_shortcut_save", {GHOST_kKeyS, "s", true, false, false}},
     {@"F3", @"blender_shortcut_search", {GHOST_kKeyF3, nullptr, false, false, false}},

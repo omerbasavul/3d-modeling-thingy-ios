@@ -270,6 +270,7 @@ jobs:
             build_files/ios/tests/test_file_access_runtime.py \
             build_files/ios/tests/test_ghost_hardware_input.py \
             build_files/ios/tests/test_ghost_virtual_pointer.py \
+            build_files/ios/tests/test_ghost_direct_touch.py \
             build_files/ios/tests/test_simulator_hardware_input.py \
             build_files/ios/tests/test_extension_commands_without_processes.py \
             build_files/ios/tests/test_simulator_compute_failure.py \
